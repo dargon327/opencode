@@ -100,49 +100,46 @@ export default function Share(props: {
     // Function to create and set up WebSocket with auto-reconnect
     const setupWebSocket = () => {
       // Close any existing connection
-      if (socket) {
-        socket.close()
-      }
+      socket?.close()
 
       setConnectionStatus(["connecting"])
 
       // Always use secure WebSocket protocol (wss)
       const wsBaseUrl = apiUrl.replace(/^https?:\/\//, "wss://")
-      const wsUrl = `${wsBaseUrl}/share_poll?id=${props.id}`
       // Create WebSocket connection
-      socket = new WebSocket(wsUrl)
-
+      socket = new WebSocket(`${wsBaseUrl}/share_poll?id=${props.id}`)
       // Handle connection opening
       socket.onopen = () => {
         setConnectionStatus(["connected"])
       }
-
+      const upsertPart = (parts: MessageV2.Part[], part: MessageV2.Part) => {
+        const byID = new Map(parts.map((x) => [x.id, x]))
+        byID.set(part.id, part)
+        return [...byID.values()]
+      }
+      const applySessionEvent = (type: string, splits: string[], content: any) => {
+        switch (type) {
+          case "info":
+            setStore("info", reconcile(content))
+            break
+          case "message": {
+            const [, messageID] = splits
+            const message = "metadata" in content ? fromV1(content) : content
+            message.parts = message.parts ?? store.messages[messageID]?.parts ?? []
+            setStore("messages", messageID, reconcile(message))
+            break
+          }
+          case "part":
+            setStore("messages", content.messageID, "parts", (parts: MessageV2.Part[]) => upsertPart(parts, content))
+            break
+        }
+      }
       // Handle incoming messages
       socket.onmessage = (event) => {
         try {
           const d = JSON.parse(event.data)
           const [root, type, ...splits] = d.key.split("/")
-          if (root !== "session") return
-          if (type === "info") {
-            setStore("info", reconcile(d.content))
-            return
-          }
-          if (type === "message") {
-            const [, messageID] = splits
-            if ("metadata" in d.content) {
-              d.content = fromV1(d.content)
-            }
-            d.content.parts = d.content.parts ?? store.messages[messageID]?.parts ?? []
-            setStore("messages", messageID, reconcile(d.content))
-          }
-          if (type === "part") {
-            setStore("messages", d.content.messageID, "parts", (arr) => {
-              const index = arr.findIndex((x) => x.id === d.content.id)
-              if (index === -1) arr.push(d.content)
-              if (index > -1) arr[index] = d.content
-              return [...arr]
-            })
-          }
+          if (root === "session") applySessionEvent(type, splits, d.content)
         } catch (error) {
           console.error("Error parsing WebSocket message:", error)
         }
