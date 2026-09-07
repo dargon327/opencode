@@ -9,6 +9,8 @@ import type { MessageV2 } from "opencode/session/message-v2"
 import type { Message } from "opencode/session/message"
 import type { Session } from "opencode/session/index"
 import { Part, ProviderIcon } from "./share/part"
+import { buildShareSocketUrl, parseSessionMessage, upsertPart } from "./share/socket-events"
+
 
 type MessageWithParts = MessageV2.Info & { parts: MessageV2.Part[] }
 
@@ -104,19 +106,13 @@ export default function Share(props: {
 
       setConnectionStatus(["connecting"])
 
-      // Always use secure WebSocket protocol (wss)
-      const wsBaseUrl = apiUrl.replace(/^https?:\/\//, "wss://")
-      // Create WebSocket connection
-      socket = new WebSocket(`${wsBaseUrl}/share_poll?id=${props.id}`)
+      // Create WebSocket connection (always upgraded to the secure wss:// scheme)
+      socket = new WebSocket(buildShareSocketUrl(apiUrl, props.id))
       // Handle connection opening
       socket.onopen = () => {
         setConnectionStatus(["connected"])
       }
-      const upsertPart = (parts: MessageV2.Part[], part: MessageV2.Part) => {
-        const byID = new Map(parts.map((x) => [x.id, x]))
-        byID.set(part.id, part)
-        return [...byID.values()]
-      }
+
       const applySessionEvent = (type: string, splits: string[], content: any) => {
         switch (type) {
           case "info":
@@ -137,9 +133,8 @@ export default function Share(props: {
       // Handle incoming messages
       socket.onmessage = (event) => {
         try {
-          const d = JSON.parse(event.data)
-          const [root, type, ...splits] = d.key.split("/")
-          if (root === "session") applySessionEvent(type, splits, d.content)
+          const parsed = parseSessionMessage(event.data)
+          if (parsed) applySessionEvent(parsed.type, parsed.splits, parsed.content)
         } catch (error) {
           console.error("Error parsing WebSocket message:", error)
         }
